@@ -1,0 +1,17 @@
+{
+    "name": "@blockless/b7s-browser-node",
+    "private": true,
+    "version": "1.0.0",
+    "license": "Apache-2.0",
+    "workspaces": [
+      "packages/*"
+    ],
+    "scripts": {
+      "build": "yarn workspaces run build",
+      "format": "npx @biomejs/biome format . --write",
+      "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "devDependencies": {
+      "@biomejs/biome": "1.4.1"
+    }
+  }
