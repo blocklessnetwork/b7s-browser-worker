@@ -60,6 +60,7 @@ export const B7S = function b7s(config: Config) {
 
 		// dispatch work to the execution environment
 		if (message.type === 'MsgExecute') {
+			this.logger.info({ msg: 'execution message recieved', ...message })
 			// fetch function
 
 			// then execute
@@ -94,6 +95,8 @@ export const B7S = function b7s(config: Config) {
 				// the stream input must be bytes
 				yield new TextEncoder().encode(resp)
 			}, responseStream)
+
+			this.logger.info({ msg: 'execution response sent', ...message })
 		}
 	})
 
