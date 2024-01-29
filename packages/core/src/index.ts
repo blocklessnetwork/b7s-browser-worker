@@ -10,6 +10,7 @@ export interface Config {
 }
 
 const WORK_PROTOCOL = '/b7s/work/1.0.0'
+const GOSSIP_TOPIC = 'blockless/b7s/general'
 
 export const B7S = function b7s(config: Config) {
 	this.logger = pino({ browser: { asObject: true } })
@@ -146,8 +147,7 @@ export const B7S = function b7s(config: Config) {
 	})
 
 	// boot the node
-	const topic = 'blockless/b7s/general'
-	libp2p.services.pubsub.subscribe(topic)
+	libp2p.services.pubsub.subscribe(GOSSIP_TOPIC)
 
 	// dial boot node
 	const boot = async () => {
