@@ -12,7 +12,7 @@ export interface Config {
 const WORK_PROTOCOL = '/b7s/work/1.0.0'
 
 export const B7S = function b7s(config: Config) {
-	this.logger = pino()
+	this.logger = pino({ browser: { asObject: true } })
 	this.libp2pnode = libp2p
 	this.peerList = {}
 	this.peerIds = []
@@ -43,6 +43,8 @@ export const B7S = function b7s(config: Config) {
 	// stream listener
 	// handle direct connections for work requests
 	libp2p.handle(WORK_PROTOCOL, async ({ connection, stream }) => {
+		this.logger.info(`direct message message recieved ${WORK_PROTOCOL}`)
+
 		const output = await pipe(stream, async (source) => {
 			let string = ''
 			const decoder = new TextDecoder()
@@ -87,8 +89,6 @@ export const B7S = function b7s(config: Config) {
 				code: '200'
 			})
 
-			console.log(resp)
-
 			// return response
 			pipe(async function* () {
 				// the stream input must be bytes
@@ -99,10 +99,12 @@ export const B7S = function b7s(config: Config) {
 
 	// update peer connections
 	libp2p.addEventListener('connection:open', () => {
+		this.logger.info('connection open')
 		updatePeerList()
 	})
 
 	libp2p.addEventListener('connection:close', () => {
+		this.logger.info('connection closed')
 		updatePeerList()
 	})
 
@@ -115,6 +117,7 @@ export const B7S = function b7s(config: Config) {
 	})
 
 	libp2p.services.pubsub.addEventListener('message', async (event) => {
+		this.logger.info('pubsub message recieved')
 		// we can use multi-topics now in the golang node
 		// we should replicate that
 		const topic = event.detail.topic
