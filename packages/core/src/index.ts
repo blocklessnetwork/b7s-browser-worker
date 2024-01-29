@@ -1,175 +1,153 @@
-import { gossipsub } from '@chainsafe/libp2p-gossipsub'
-import { noise } from '@chainsafe/libp2p-noise'
-import { yamux } from '@chainsafe/libp2p-yamux'
-import { circuitRelayTransport } from '@libp2p/circuit-relay-v2'
-import { dcutr } from '@libp2p/dcutr'
-import { identify } from '@libp2p/identify'
-import { webRTC } from '@libp2p/webrtc'
-import { webSockets } from '@libp2p/websockets'
-import * as filters from '@libp2p/websockets/filters'
 import { multiaddr } from '@multiformats/multiaddr'
-import { createLibp2p } from 'libp2p'
-import { fromString, toString } from 'uint8arrays'
+import * as uint8arrays from 'uint8arrays'
+import { libp2p } from './node'
+import executor from './executor'
+import { pipe } from 'it-pipe'
+import pino from 'pino'
 
-const DOM = {
-  peerId: () => document.getElementById('peer-id'),
-
-  dialMultiaddrInput: () => document.getElementById('dial-multiaddr-input'),
-  dialMultiaddrButton: () => document.getElementById('dial-multiaddr-button'),
-
-  subscribeTopicInput: () => document.getElementById('subscribe-topic-input'),
-  subscribeTopicButton: () => document.getElementById('subscribe-topic-button'),
-
-  sendTopicMessageInput: () => document.getElementById('send-topic-message-input'),
-  sendTopicMessageButton: () => document.getElementById('send-topic-message-button'),
-
-  output: () => document.getElementById('output'),
-
-  listeningAddressesList: () => document.getElementById('listening-addresses'),
-  peerConnectionsList: () => document.getElementById('peer-connections'),
-  topicPeerList: () => document.getElementById('topic-peers')
+export interface Config {
+	bootNodeAddress: string
 }
 
-const appendOutput = (line) => {
-  DOM.output().innerText += `${line}\n`
+const WORK_PROTOCOL = '/b7s/work/1.0.0'
+
+export const B7S = function b7s(config: Config) {
+	this.logger = pino()
+	this.libp2pnode = libp2p
+	this.peerList = {}
+	this.peerIds = []
+	this.multiaddrs = []
+	this.peerId = libp2p.peerId.toString()
+
+	// think about storing these in app storage, so we can dial back when we drop
+	// this is how we function on the go node
+	const updatePeerList = () => {
+		// Update connections list
+		// biome-ignore lint/complexity/noForEach: i don't like this rule
+		libp2p.getPeers().forEach((peerId) => {
+			this.peerIds.push(peerId.toString())
+			this.peerList[peerId.toString()]
+
+			const addrList: string[] = []
+
+			for (const conn of libp2p.getConnections(peerId)) {
+				addrList.push(conn.remoteAddr.toString())
+			}
+
+			this.peerList[peerId.toString()] = {
+				addrList
+			}
+		})
+	}
+
+	// stream listener
+	// handle direct connections for work requests
+	libp2p.handle(WORK_PROTOCOL, async ({ connection, stream }) => {
+		const output = await pipe(stream, async (source) => {
+			let string = ''
+			const decoder = new TextDecoder()
+			for await (const buf of source) {
+				// buf is a `Uint8ArrayList` so we must turn it into a `Uint8Array`
+				// before decoding it
+				string += decoder.decode(buf.subarray())
+			}
+			return string
+		})
+
+		const message = JSON.parse(output)
+
+		// dispatch work to the execution environment
+		if (message.type === 'MsgExecute') {
+			// fetch function
+
+			// then execute
+			executor.execute()
+
+			// we need to dial back, but should probably check
+			// if we have a stream available to come back to
+			const responseStream = await libp2p.dialProtocol(
+				connection.remoteAddr,
+				WORK_PROTOCOL
+			)
+
+			const resp = JSON.stringify({
+				type: 'MsgExecuteResponse',
+				request_id: message.request_id,
+				results: {
+					[libp2p.peerId.toString()]: {
+						code: '200',
+						result: {
+							exit_code: 0,
+							stderr: '',
+							stdout: 'Hello World From the Browser'
+						},
+						request_id: message.request_id
+					}
+				},
+				code: '200'
+			})
+
+			console.log(resp)
+
+			// return response
+			pipe(async function* () {
+				// the stream input must be bytes
+				yield new TextEncoder().encode(resp)
+			}, responseStream)
+		}
+	})
+
+	// update peer connections
+	libp2p.addEventListener('connection:open', () => {
+		updatePeerList()
+	})
+
+	libp2p.addEventListener('connection:close', () => {
+		updatePeerList()
+	})
+
+	// update listening addresses
+	libp2p.addEventListener('self:peer:update', () => {
+		const multiaddrs = libp2p.getMultiaddrs().map((ma) => {
+			return ma.toString()
+		})
+		this.multiaddrs = multiaddrs
+	})
+
+	libp2p.services.pubsub.addEventListener('message', async (event) => {
+		// we can use multi-topics now in the golang node
+		// we should replicate that
+		const topic = event.detail.topic
+		const message = JSON.parse(uint8arrays.toString(event.detail.data))
+
+		// dispatch work to the execution environment
+		if (message.type === 'MsgRollCall') {
+			this.logger.info(message)
+			// respond if you can do work
+			await libp2p.services.pubsub.publish(
+				topic,
+				uint8arrays.fromString(
+					JSON.stringify({
+						type: 'MsgRollCallResponse',
+						from: libp2p.peerId,
+						code: '202', // standard http code
+						request_id: message.request_id,
+						function_id: message.function_id
+					})
+				)
+			)
+		}
+	})
+
+	// boot the node
+	const topic = 'blockless/b7s/general'
+	libp2p.services.pubsub.subscribe(topic)
+
+	// dial boot node
+	const boot = async () => {
+		const ma = multiaddr(config.bootNodeAddress)
+		await libp2p.dial(ma)
+	}
+
+	boot()
 }
-const clean = (line) => line.replaceAll('\n', '')
-
-const libp2p = await createLibp2p({
-  addresses: {
-    listen: [
-      // create listeners for incoming WebRTC connection attempts on on all
-      // available Circuit Relay connections
-      '/webrtc'
-    ]
-  },
-  transports: [
-    // the WebSocket transport lets us dial a local relay
-    webSockets({
-      // this allows non-secure WebSocket connections for purposes of the demo
-      filter: filters.all
-    }),
-    // support dialing/listening on WebRTC addresses
-    webRTC(),
-    // support dialing/listening on Circuit Relay addresses
-    circuitRelayTransport({
-      // make a reservation on any discovered relays - this will let other
-      // peers use the relay to contact us
-      discoverRelays: 1
-    })
-  ],
-  // a connection encrypter is necessary to dial the relay
-  connectionEncryption: [noise()],
-  // a stream muxer is necessary to dial the relay
-  streamMuxers: [yamux()],
-  connectionGater: {
-    denyDialMultiaddr: () => {
-      // by default we refuse to dial local addresses from browsers since they
-      // are usually sent by remote peers broadcasting undialable multiaddrs and
-      // cause errors to appear in the console but in this example we are
-      // explicitly connecting to a local node so allow all addresses
-      return false
-    }
-  },
-  services: {
-    identify: identify(),
-    pubsub: gossipsub(),
-    dcutr: dcutr()
-  },
-  connectionManager: {
-    minConnections: 0
-  }
-})
-
-DOM.peerId().innerText = libp2p.peerId.toString()
-
-function updatePeerList () {
-  // Update connections list
-  const peerList = libp2p.getPeers()
-    .map(peerId => {
-      const el = document.createElement('li')
-      el.textContent = peerId.toString()
-
-      const addrList = document.createElement('ul')
-
-      for (const conn of libp2p.getConnections(peerId)) {
-        const addr = document.createElement('li')
-        addr.textContent = conn.remoteAddr.toString()
-
-        addrList.appendChild(addr)
-      }
-
-      el.appendChild(addrList)
-
-      return el
-    })
-  DOM.peerConnectionsList().replaceChildren(...peerList)
-}
-
-// update peer connections
-libp2p.addEventListener('connection:open', () => {
-  updatePeerList()
-})
-libp2p.addEventListener('connection:close', () => {
-  updatePeerList()
-})
-
-// update listening addresses
-libp2p.addEventListener('self:peer:update', () => {
-  const multiaddrs = libp2p.getMultiaddrs()
-    .map((ma) => {
-      const el = document.createElement('li')
-      el.textContent = ma.toString()
-      return el
-    })
-  DOM.listeningAddressesList().replaceChildren(...multiaddrs)
-})
-
-// dial remote peer
-DOM.dialMultiaddrButton().onclick = async () => {
-  const ma = multiaddr(DOM.dialMultiaddrInput().value)
-  appendOutput(`Dialing '${ma}'`)
-  await libp2p.dial(ma)
-  appendOutput(`Connected to '${ma}'`)
-}
-
-// subscribe to pubsub topic
-DOM.subscribeTopicButton().onclick = async () => {
-  const topic = DOM.subscribeTopicInput().value
-  appendOutput(`Subscribing to '${clean(topic)}'`)
-
-  libp2p.services.pubsub.subscribe(topic)
-
-  DOM.sendTopicMessageInput().disabled = undefined
-  DOM.sendTopicMessageButton().disabled = undefined
-}
-
-// send message to topic
-DOM.sendTopicMessageButton().onclick = async () => {
-  const topic = DOM.subscribeTopicInput().value
-  const message = DOM.sendTopicMessageInput().value
-  appendOutput(`Sending message '${clean(message)}'`)
-
-  await libp2p.services.pubsub.publish(topic, fromString(message))
-}
-
-// update topic peers
-setInterval(() => {
-  const topic = DOM.subscribeTopicInput().value
-
-  const peerList = libp2p.services.pubsub.getSubscribers(topic)
-    .map(peerId => {
-      const el = document.createElement('li')
-      el.textContent = peerId.toString()
-      return el
-    })
-  DOM.topicPeerList().replaceChildren(...peerList)
-}, 500)
-
-libp2p.services.pubsub.addEventListener('message', event => {
-  const topic = event.detail.topic
-  const message = toString(event.detail.data)
-
-  appendOutput(`Message received on topic '${topic}'`)
-  appendOutput(message)
-})
