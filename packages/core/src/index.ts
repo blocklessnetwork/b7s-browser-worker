@@ -102,13 +102,13 @@ export const B7S = function b7s(config: Config) {
 	})
 
 	// update peer connections
-	libp2p.addEventListener('connection:open', () => {
-		this.logger.info('connection open')
+	libp2p.addEventListener('connection:open', (event) => {
+		this.logger.info({ msg: 'connection open', ...event })
 		updatePeerList()
 	})
 
-	libp2p.addEventListener('connection:close', () => {
-		this.logger.info('connection closed')
+	libp2p.addEventListener('connection:close', (event) => {
+		this.logger.info({ msg: 'connection closed', ...event })
 		updatePeerList()
 	})
 
@@ -121,11 +121,11 @@ export const B7S = function b7s(config: Config) {
 	})
 
 	libp2p.services.pubsub.addEventListener('message', async (event) => {
-		this.logger.info('pubsub message recieved')
 		// we can use multi-topics now in the golang node
 		// we should replicate that
 		const topic = event.detail.topic
 		const message = JSON.parse(uint8arrays.toString(event.detail.data))
+		this.logger.info({ msg: 'pubsub message recieved', topic, ...message })
 
 		// dispatch work to the execution environment
 		if (message.type === 'MsgRollCall') {
