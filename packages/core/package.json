@@ -26,7 +26,7 @@
     "@libp2p/identify": "^1.0.3",
     "@libp2p/mplex": "^10.0.4",
     "@libp2p/webrtc": "^4.0.5",
-    "@libp2p/websockets": "^8.0.4",
+    "@libp2p/websockets": "^9.1.0",
     "@multiformats/multiaddr": "^12.1.11",
     "git": "^0.1.5",
     "it-length-prefixed-stream": "^1.1.6",
